@@ -7,12 +7,12 @@ on:
 
 jobs:
 
-# ===================================
-# 1️⃣ PREPARE VERSION
-# ===================================
+  # ===================================
+  # 1️⃣ PREPARE VERSION
+  # ===================================
 
   prepare_version:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64]
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -25,12 +25,12 @@ jobs:
           VERSION=$(($(cat version.txt) + 1))
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-# ===================================
-# 2️⃣ SONARQUBE SAST + QUALITY GATE
-# ===================================
+  # ===================================
+  # 2️⃣ SONARQUBE SAST + QUALITY GATE
+  # ===================================
 
   sonarqube_scan:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64]
     needs: prepare_version
 
     steps:
@@ -38,7 +38,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Backend Scan
       - name: SonarQube Scan Backend
         uses: sonarsource/sonarqube-scan-action@v2
         with:
@@ -47,7 +46,6 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # Frontend Scan
       - name: SonarQube Scan Frontend
         uses: sonarsource/sonarqube-scan-action@v2
         with:
@@ -56,16 +54,15 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # Quality Gate Check
       - name: SonarQube Quality Gate
         uses: sonarsource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-# ===================================
-# 3️⃣ BUILD & PUSH DOCKER IMAGES
-# ===================================
+  # ===================================
+  # 3️⃣ BUILD & PUSH DOCKER IMAGES
+  # ===================================
 
   build_push:
     runs-on: ubuntu-latest
@@ -88,9 +85,9 @@ jobs:
           docker build -t sonamsc507/sop-frontend-final:${{ needs.prepare_version.outputs.version }} ./SOP_FrontEnd
           docker push sonamsc507/sop-frontend-final:${{ needs.prepare_version.outputs.version }}
 
-# ===================================
-# 4️⃣ TRIVY IMAGE SCAN (FAIL ON CRITICAL)
-# ===================================
+  # ===================================
+  # 4️⃣ TRIVY IMAGE SCAN (FAIL ON CRITICAL)
+  # ===================================
 
   image_scan:
     runs-on: ubuntu-latest
@@ -111,9 +108,9 @@ jobs:
           severity: CRITICAL
           exit-code: '1'
 
-# ===================================
-# 5️⃣ UPDATE YAML & VERSION FILE
-# ===================================
+  # ===================================
+  # 5️⃣ UPDATE YAML & VERSION FILE
+  # ===================================
 
   update_yaml:
     runs-on: ubuntu-latest
@@ -130,22 +127,19 @@ jobs:
       - name: Update Images & Version
         run: |
           VERSION=${{ needs.prepare_version.outputs.version }}
-
           sed -i "s|image: sonamsc507/sop-backend-final:.*|image: sonamsc507/sop-backend-final:$VERSION|" all-in-one.yaml
           sed -i "s|image: sonamsc507/sop-frontend-final:.*|image: sonamsc507/sop-frontend-final:$VERSION|" all-in-one.yaml
-
           echo $VERSION > version.txt
-
           git add all-in-one.yaml version.txt
           git commit -m "Updated images to version $VERSION"
           git push
 
-# ===================================
-# 6️⃣ DEPLOY TO KUBERNETES
-# ===================================
+  # ===================================
+  # 6️⃣ DEPLOY TO KUBERNETES
+  # ===================================
 
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64]
     needs: update_yaml
 
     steps:
