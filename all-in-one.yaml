@@ -5,7 +5,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: sop-db-secret
-  namespace: sop
+  namespace: sop1
 type: Opaque
 data:
   # Replace this with your base64-encoded password
@@ -19,7 +19,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: sop-db-config
-  namespace: sop
+  namespace: sop1
 data:
   DB_HOST: "10.70.91.8"
   DB_PORT: "3306"
@@ -34,7 +34,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sop-backend
-  namespace: sop
+  namespace: sop1
 spec:
   replicas: 2
   selector:
@@ -82,7 +82,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: sop-backend-service
-  namespace: sop
+  namespace: sop1
 spec:
   type: ClusterIP
   selector:
@@ -99,7 +99,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sop-frontend
-  namespace: sop
+  namespace: sop1
 spec:
   replicas: 2
   selector:
@@ -121,7 +121,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: sop-frontend-service
-  namespace: sop
+  namespace: sop1
 spec:
   type: NodePort
   selector:

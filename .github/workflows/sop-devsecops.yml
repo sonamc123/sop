@@ -1,103 +1,121 @@
-name: "SAST, Build, Scan, Update all-in-one.yaml & version.txt"
+name: "SAST → Build → Scan → Update → Deploy"
 
 on:
   push:
     branches:
       - main
 
-env:
-  VERSION: $(( $(cat version.txt) + 1 ))
-
 jobs:
 
-# =============================
-# 1️⃣ SONARQUBE SAST
-# =============================
+# ===================================
+# 1️⃣ PREPARE VERSION
+# ===================================
 
-  sonarqube_sast_scan:
-    runs-on: self-hosted
+  prepare_version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+
+      - name: Calculate New Version
+        id: version
+        run: |
+          VERSION=$(($(cat version.txt) + 1))
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+# ===================================
+# 2️⃣ SONARQUBE SAST + QUALITY GATE
+# ===================================
+
+  sonarqube_scan:
+    runs-on: self-hosted
+    needs: prepare_version
+
+    steps:
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
+      # Backend Scan
       - name: SonarQube Scan Backend
-        uses: sonarsource/sonarqube-scan-action@master
+        uses: sonarsource/sonarqube-scan-action@v2
         with:
           projectBaseDir: SOP_Backend
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      # Frontend Scan
       - name: SonarQube Scan Frontend
-        uses: sonarsource/sonarqube-scan-action@master
+        uses: sonarsource/sonarqube-scan-action@v2
         with:
           projectBaseDir: SOP_FrontEnd
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-# =============================
-# 2️⃣ BUILD & PUSH IMAGES
-# =============================
+      # Quality Gate Check
+      - name: SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  build_push_images:
+# ===================================
+# 3️⃣ BUILD & PUSH DOCKER IMAGES
+# ===================================
+
+  build_push:
     runs-on: ubuntu-latest
-    needs: sonarqube_sast_scan
+    needs: sonarqube_scan
 
     steps:
       - uses: actions/checkout@v3
 
       - name: Login to DockerHub
-        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build & Push Backend
         run: |
-          docker build -t sonamsc507/sop-backend-final:${{ env.VERSION }} ./SOP_Backend
-          docker push sonamsc507/sop-backend-final:${{ env.VERSION }}
+          docker build -t sonamsc507/sop-backend-final:${{ needs.prepare_version.outputs.version }} ./SOP_Backend
+          docker push sonamsc507/sop-backend-final:${{ needs.prepare_version.outputs.version }}
 
       - name: Build & Push Frontend
         run: |
-          docker build -t sonamsc507/sop-frontend-final:${{ env.VERSION }} ./SOP_FrontEnd
-          docker push sonamsc507/sop-frontend-final:${{ env.VERSION }}
+          docker build -t sonamsc507/sop-frontend-final:${{ needs.prepare_version.outputs.version }} ./SOP_FrontEnd
+          docker push sonamsc507/sop-frontend-final:${{ needs.prepare_version.outputs.version }}
 
-# =============================
-# 3️⃣ TRIVY IMAGE SCAN
-# =============================
+# ===================================
+# 4️⃣ TRIVY IMAGE SCAN (FAIL ON CRITICAL)
+# ===================================
 
   image_scan:
-    runs-on: self-hosted
-    needs: build_push_images
+    runs-on: ubuntu-latest
+    needs: build_push
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Pull Images
-        run: |
-          docker pull sonamsc507/sop-backend-final:${{ env.VERSION }}
-          docker pull sonamsc507/sop-frontend-final:${{ env.VERSION }}
-
       - name: Scan Backend Image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
-          image-ref: sonamsc507/sop-backend-final:${{ env.VERSION }}
-          severity: CRITICAL,HIGH
-          exit-code: '0'
+          image-ref: sonamsc507/sop-backend-final:${{ needs.prepare_version.outputs.version }}
+          severity: CRITICAL
+          exit-code: '1'
 
       - name: Scan Frontend Image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
-          image-ref: sonamsc507/sop-frontend-final:${{ env.VERSION }}
-          severity: CRITICAL,HIGH
-          exit-code: '0'
+          image-ref: sonamsc507/sop-frontend-final:${{ needs.prepare_version.outputs.version }}
+          severity: CRITICAL
+          exit-code: '1'
 
-# =============================
-# 4️⃣ UPDATE all-in-one.yaml
-# =============================
+# ===================================
+# 5️⃣ UPDATE YAML & VERSION FILE
+# ===================================
 
-  update_k8s_yaml:
+  update_yaml:
     runs-on: ubuntu-latest
     needs: image_scan
 
@@ -109,16 +127,32 @@ jobs:
           git config --global user.email "${{ secrets.GIT_EMAIL }}"
           git config --global user.name "${{ secrets.GIT_USERNAME }}"
 
-      - name: Update Image Tags & Version
+      - name: Update Images & Version
         run: |
-          git pull
+          VERSION=${{ needs.prepare_version.outputs.version }}
 
-          sed -i "s|image: sonamsc507/sop-backend-final:.*|image: sonamsc507/sop-backend-final:${{ env.VERSION }}|" all-in-one.yaml
-          sed -i "s|image: sonamsc507/sop-frontend-final:.*|image: sonamsc507/sop-frontend-final:${{ env.VERSION }}|" all-in-one.yaml
+          sed -i "s|image: sonamsc507/sop-backend-final:.*|image: sonamsc507/sop-backend-final:$VERSION|" all-in-one.yaml
+          sed -i "s|image: sonamsc507/sop-frontend-final:.*|image: sonamsc507/sop-frontend-final:$VERSION|" all-in-one.yaml
 
-          echo ${{ env.VERSION }} > version.txt
+          echo $VERSION > version.txt
 
           git add all-in-one.yaml version.txt
-          git commit -m "Updated images to version ${{ env.VERSION }}"
+          git commit -m "Updated images to version $VERSION"
           git push
 
+# ===================================
+# 6️⃣ DEPLOY TO KUBERNETES
+# ===================================
+
+  deploy:
+    runs-on: self-hosted
+    needs: update_yaml
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f all-in-one.yaml
+          kubectl rollout status deployment/sop-backend
+          kubectl rollout status deployment/sop-frontend
